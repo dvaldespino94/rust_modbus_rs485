@@ -98,23 +98,26 @@ impl RS485Sender for RS485SenderImpl {
         if let Err(error) = self.pin.set_high() {
             return Err(error.to_string());
         }
-        std::thread::sleep(Duration::from_millis(1));
+        std::thread::sleep(Duration::from_millis(2));
 
         let result = match self.serial.write(data.as_slice()) {
             Ok(_) => Ok(()),
             Err(err) => return Err(err.to_string()),
         };
 
+	std::thread::sleep(Duration::from_millis(10));
+
         if let Err(error) = self.pin.set_low() {
             return Err(error.to_string());
         }
+	
 
         result
     }
 
     fn receive(&mut self, count: usize) -> Result<Vec<u8>, String> {
-        let mut buf = Vec::with_capacity(count);
-        match self.serial.read(&mut buf) {
+        let mut buf = [0; 256];
+        match self.serial.read(&mut buf[..]){
             Ok(_) => Ok(buf),
             Err(error) => Err(error.to_string()),
         }
@@ -129,9 +132,9 @@ fn main() {
             request
                 .generate_get_holdings(1, 1, &mut request_buffer)
                 .unwrap();
-
+//		port.send("This is a test".as_bytes().to_vec()).unwrap();
             port.send(request_buffer).expect("Error sending data");
-            println!("Got: {:?}", port.receive(10));
+            println!("Got: {:?}", port.receive(255));
         }
         Err(error) => {
             println!("Error creating port: {error:?}");
