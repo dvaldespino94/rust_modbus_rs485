@@ -49,6 +49,8 @@ impl Modbus for ModbusRtu {
                     return Err("Not enough data received".to_string());
                 }
 
+		println!("Got {} bytes: {data:?}", data.len());
+
                 // Guess how long the whole message is based on the first bytes
                 let guessed_length =
                     match guess_response_frame_len(&data, rmodbus::ModbusProto::Rtu) {
@@ -58,6 +60,8 @@ impl Modbus for ModbusRtu {
 
                 // If there was some more data to be received append it to the buffer
                 if guessed_length > MESSAGE_HEADER_LENGTH {
+		    println!("Seems that message is longer than {}: it should be {guessed_length} bytes long", data.len());
+			while data.len() < guessed_length as usize {
                     match self
                         .transport
                         .receive((guessed_length - MESSAGE_HEADER_LENGTH) as usize)
@@ -65,7 +69,10 @@ impl Modbus for ModbusRtu {
                         Ok(more_data) => data.extend(more_data),
                         Err(error) => return Err(error.to_string()),
                     };
+}
                 }
+
+		println!("Finally message is {} bytes long: {data:?}", data.len());
 
                 // Parse the modbus response
                 match request.parse_ok(&data) {

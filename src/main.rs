@@ -167,7 +167,7 @@ mod backend {
     pub fn main() {
         match transport::new("/dev/ttyS1", 6, 19200, Duration::from_secs(1)) {
             Ok(port) => match modbus::create(port) {
-                Ok(mut mb) => match mb.request_register(1, 1, 2) {
+                Ok(mut mb) => match mb.request_register(1, 0, 32){
                     Ok(result) => println!("Result: {result:?}"),
                     Err(error) => println!("Error: {error}"),
                 },

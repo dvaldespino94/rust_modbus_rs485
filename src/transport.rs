@@ -67,7 +67,7 @@ impl Transport for RS485SenderImpl {
             Err(err) => return Err(err.to_string()),
         };
 
-        std::thread::sleep(Duration::from_millis(4));
+        std::thread::sleep(Duration::from_millis(5));
 
         if let Err(error) = self.pin.set_value(false) {
             return Err(error.to_string());
