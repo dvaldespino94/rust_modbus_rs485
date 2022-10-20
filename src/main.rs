@@ -122,7 +122,7 @@ impl RS485Sender for RS485SenderImpl {
 }
 
 fn main() {
-    match RS485SenderImpl::new("/dev/tty.usbserial-1420", 6, 19200, Duration::from_secs(1)) {
+    match RS485SenderImpl::new("/dev/ttyS1", 6, 19200, Duration::from_secs(1)) {
         Ok(mut port) => {
             let mut request = ModbusRequest::new(1, rmodbus::ModbusProto::Rtu);
             let mut request_buffer = Vec::new();
