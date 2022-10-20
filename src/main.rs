@@ -105,20 +105,19 @@ impl RS485Sender for RS485SenderImpl {
             Err(err) => return Err(err.to_string()),
         };
 
-	std::thread::sleep(Duration::from_millis(10));
+        std::thread::sleep(Duration::from_millis(10));
 
         if let Err(error) = self.pin.set_low() {
             return Err(error.to_string());
         }
-	
 
         result
     }
 
     fn receive(&mut self, count: usize) -> Result<Vec<u8>, String> {
         let mut buf = [0; 256];
-        match self.serial.read(&mut buf[..]){
-            Ok(_) => Ok(buf),
+        match self.serial.read(&mut buf[..]) {
+            Ok(_) => Ok(buf.to_vec()),
             Err(error) => Err(error.to_string()),
         }
     }
@@ -132,7 +131,7 @@ fn main() {
             request
                 .generate_get_holdings(1, 1, &mut request_buffer)
                 .unwrap();
-//		port.send("This is a test".as_bytes().to_vec()).unwrap();
+            //		port.send("This is a test".as_bytes().to_vec()).unwrap();
             port.send(request_buffer).expect("Error sending data");
             println!("Got: {:?}", port.receive(255));
         }
