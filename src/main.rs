@@ -52,7 +52,7 @@ use std::{
 // }
 
 use gpio::GpioOut;
-use rmodbus::client::ModbusRequest;
+use rmodbus::{client::ModbusRequest, guess_response_frame_len};
 use serial::{unix::TTYPort, BaudRate, SerialPort};
 
 trait RS485Sender {
@@ -133,7 +133,16 @@ fn main() {
                 .unwrap();
             //		port.send("This is a test".as_bytes().to_vec()).unwrap();
             port.send(request_buffer).expect("Error sending data");
-            println!("Got: {:?}", port.receive(255));
+            if let Ok(mut data) = port.receive(256) {
+                let len = guess_response_frame_len(&data, rmodbus::ModbusProto::Rtu).unwrap();
+                unsafe { data.set_len(len as usize) };
+                request.parse_ok(&data).unwrap();
+                let mut values: Vec<u16> = Vec::new();
+                request.parse_u16(&data, &mut values);
+                println!("Value is {values:?}");
+            } else {
+                println!("Error receiving from slave!");
+            }
         }
         Err(error) => {
             println!("Error creating port: {error:?}");
