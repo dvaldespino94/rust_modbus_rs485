@@ -11,7 +11,8 @@
 			"group": {
 				"kind": "build",
 				"isDefault": true
-			}
+			},
+			"env": {"RUST_BACKTRACE": "full"}
 		}
 	]
 }
