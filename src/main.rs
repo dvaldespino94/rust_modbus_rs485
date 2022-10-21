@@ -1,156 +1,186 @@
-use std::{
-    io::{Read, Write},
-    time::Duration,
-};
+use nickel::{Request, Response, MiddlewareResult};
 
-const BUFFER_SIZE: usize = 512;
-
-// #[macro_use]
-// extern crate nickel;
-
-// use nickel::Nickel;
-// use rustorm::{
-//     DbError,
-//     FromDao,
-//     Pool,
-//     TableName,
-//     ToColumnNames,
-//     ToDao,
-//     ToTableName,
-// };
-
-// mod for_insert {
-//     #[derive(Debug, PartialEq, ToDao, ToColumnNames, ToTableName)]
-//     pub struct Sensor {
-//         pub reg: u16,
-//         pub value: u16,
-//     }
-// }
-
-// mod for_retrieve {
-//     #[derive(Debug, FromDao, ToColumnNames, ToTableName)]
-//     pub struct Sensor {
-//         pub id: i32,
-//         pub reg: u16,
-//         pub value: u16,
-//     }
-// }
-
-// fn main() {
-//     let mut server = Nickel::new();
-//     let pool = Pool::new();
-//     pool.em("sqlite://test.sqlite").unwrap();
-//     let s0=for_insrt::Sensor{
-
-//     };
-
-//     server.utilize(router! {
-//         get "**" => |_req, _res| {
-//             "Hello world!"
-//         }
-//     });
-
-//     server.listen("127.0.0.1:6767").unwrap();
-// }
-
-use gpio::GpioOut;
-use rmodbus::{client::ModbusRequest, guess_response_frame_len};
-use serial::{unix::TTYPort, BaudRate, SerialPort};
-
-trait RS485Sender {
-    fn send(&mut self, data: Vec<u8>) -> Result<(), String>;
-    fn receive(&mut self, count: usize) -> Result<Vec<u8>, String>;
+fn logger_fn<'mw>(req: &mut Request, res: Response<'mw>) -> MiddlewareResult<'mw> {
+    println!("logging request from logger fn: {:?}", req.origin.uri);
+    res.next_middleware()
 }
 
-struct RS485SenderImpl {
-    serial: TTYPort,
-    pin: gpio::sysfs::SysFsGpioOutput,
-}
+mod rest_api {
+    use std::sync::{Arc, Mutex};
 
-impl RS485SenderImpl {
-    pub fn new(path: &str, pin: u16, baudrate: usize, timeout: Duration) -> Result<Self, String> {
-        match serial::open(path) {
-            Ok(mut port) => {
-                if let Err(error) = port.set_timeout(timeout) {
-                    return Err(error.to_string());
-                }
+    use nickel::{status::StatusCode, *};
+    use rustorm::Pool;
 
-                if let Err(err) = port.reconfigure(&|config| {
-                    Ok({
-                        config.set_baud_rate(BaudRate::from_speed(baudrate))?;
-                    })
-                }) {
-                    return Err(err.to_string());
-                }
+    use crate::logger_fn;
 
-                let pin = match gpio::sysfs::SysFsGpioOutput::open(pin) {
-                    Ok(it) => it,
-                    Err(error) => return Err(error.to_string()),
-                };
+    mod json_structs {
+        use serde::Serialize;
 
-                Ok(Self { serial: port, pin })
-            }
-            Err(error) => return Err(error.to_string()),
+        #[derive(Debug, Serialize)]
+        pub struct SensorInfo {
+            pub id: i32,
+            pub group_id: i32,
+            pub r#type: String,
+            pub value: i32,
         }
     }
-}
 
-impl RS485Sender for RS485SenderImpl {
-    fn send(&mut self, data: Vec<u8>) -> Result<(), String> {
-        if let Err(error) = self.pin.set_high() {
-            return Err(error.to_string());
+    mod for_retrieve {
+        use rustorm::*;
+        use serde::Serialize;
+
+        #[derive(Serialize, Debug, FromDao, ToColumnNames, ToTableName)]
+        pub struct Sensor {
+            pub id: i32,
+            pub addr: i32,
+            pub name: String,
+            pub description: String,
+            pub writable: bool,
+            pub bits: String,
         }
-        std::thread::sleep(Duration::from_millis(2));
 
-        let result = match self.serial.write(data.as_slice()) {
-            Ok(_) => Ok(()),
-            Err(err) => return Err(err.to_string()),
+        #[derive(Serialize, Debug, FromDao, ToColumnNames, ToTableName)]
+        pub struct SensorQuery {
+            pub id: i32,
+            pub group_id: i32,
+            pub bits: String,
+            pub value: i32,
+            pub writable: bool,
+        }
+    }
+
+    pub fn main() -> Result<(), String> {
+        let mut server = Nickel::new();
+        let mut pool = Pool::new();
+
+        let real_db = match pool.em("sqlite://test.sqlite") {
+            Ok(it) => it,
+            Err(error) => return Err(error.to_string()),
         };
 
-        std::thread::sleep(Duration::from_millis(4));
+        let db_mutex = Mutex::new(real_db);
+        let db = Arc::new(db_mutex);
 
-        if let Err(error) = self.pin.set_low() {
-            return Err(error.to_string());
-        }
+        server.utilize(logger_fn);
 
-        result
+        let db_sensors_id = db.clone();
+        server.get(
+            "/sensors/:id",
+            middleware! {
+                |request|
+
+                println!("{:?}", request.query());
+
+                let result = if let Some(id_as_string) = request.param("id"){
+                    if let Some((group, id)) = id_as_string.split_once(":"){
+                        match db_sensors_id.lock() {
+                            Ok(mut db) => {
+                                match db.execute_sql_with_one_return::<for_retrieve::SensorQuery>("SELECT * FROM SensorQuery WHERE id==? AND group_id==?", &[&id, &group]){
+                                    Ok(result) => {
+                                        serde_json::to_string(&result).unwrap_or_default()
+                                    },
+                                    Err(_) => String::new(),
+                                }
+                            },
+                            Err(_) => String::new(),
+                        }
+                    }else{
+                        String::new()
+                    }
+                }else{
+                    String::new()
+                };
+
+                if result.is_empty(){
+                    (StatusCode::BadRequest, "Bad Request - Error".to_string())
+                }else{
+                    (StatusCode::Ok, result)
+                }
+            }
+        );
+
+        let db_sensors = db.clone();
+        server.get(
+            "/sensors",
+            middleware! {|request|
+                println!("Handling /sensors");
+                let group = request.query().get("gid");
+                let sql_query= match group{
+                    Some(it) => format!("SELECT * FROM SensorQuery WHERE group_id = {it}"),
+                    None => "SELECT * FROM SensorQuery".to_string(),
+                };
+
+                let sensors: Vec<json_structs::SensorInfo> = match db_sensors.lock(){
+                    Ok(mut db) => {
+                        if let Ok(sensors) = db.execute_sql_with_return::<for_retrieve::SensorQuery>(sql_query.as_str(), &[]){
+                            sensors.iter().filter_map(|it|{
+                                match it.writable {
+                                    false => {
+                                        let r#type = if it.bits.parse::<u16>().is_ok(){
+                                            "Bool"
+                                        }else{
+                                            "Int"
+                                        }.to_string();
+
+                                        Some(
+                                            json_structs::SensorInfo{ id: it.id, group_id: it.group_id, r#type, value: it.value }
+                                        )
+                                    },
+                                    _ => None,
+                                }
+                            })   .collect()
+                        }else{
+                            Vec::new()
+                        }
+                    },
+                    Err(_) => Vec::new(),
+                };
+
+                match serde_json::to_string(&sensors){
+                    Ok(it) => it,
+                    Err(error) => format!("Error: {error:?}"),
+                }
+            },
+        );
+
+        server.utilize(router! {
+            get "**" => |_req, _res| {
+                (StatusCode::NotFound, "404 - Error")
+            }
+        });
+
+        server.listen("127.0.0.1:6767").unwrap();
+
+        Ok(())
     }
+}
 
-    fn receive(&mut self, count: usize) -> Result<Vec<u8>, String> {
-        let mut buf = [0; BUFFER_SIZE];
-        match self.serial.read(&mut buf[..]) {
-            Ok(_) => Ok(buf.to_vec()),
-            Err(error) => Err(error.to_string()),
-        }
+mod modbus;
+mod pin;
+mod transport;
+
+mod backend {
+    use std::time::Duration;
+
+    use crate::{modbus, transport};
+
+    pub fn main() {
+        match transport::new("/dev/ttyS1", 6, 19200, Duration::from_secs(1)) {
+            Ok(port) => match modbus::create(port) {
+                Ok(mut mb) => match mb.request_register(1, 1, 2) {
+                    Ok(result) => println!("Result: {result:?}"),
+                    Err(error) => println!("Error: {error}"),
+                },
+                Err(error) => println!("Error creating port: {error}"),
+            },
+            Err(error) => {
+                println!("Error creating port: {error:?}");
+            }
+        };
     }
 }
 
 fn main() {
-    match RS485SenderImpl::new("/dev/ttyS1", 6, 19200, Duration::from_secs(1)) {
-        Ok(mut port) => {
-            let mut request = ModbusRequest::new(1, rmodbus::ModbusProto::Rtu);
-            let mut request_buffer = Vec::new();
-            request
-                .generate_get_holdings(1, 1, &mut request_buffer)
-                .unwrap();
-            //		port.send("This is a test".as_bytes().to_vec()).unwrap();
-            port.send(request_buffer).expect("Error sending data");
-            match port.receive(BUFFER_SIZE) {
-                Ok(mut data) => {
-                    let len = guess_response_frame_len(&data, rmodbus::ModbusProto::Rtu).unwrap();
-                    unsafe { data.set_len(len as usize) };
-                    request.parse_ok(&data).unwrap();
-                    let mut values: Vec<u16> = Vec::new();
-                    request.parse_u16(&data, &mut values);
-                    println!("Value is {values:?}");
-                }
-                Err(error) => {
-                    println!("Error receiving from slave: {error:?}");
-                }
-            }
-        }
-        Err(error) => {
-            println!("Error creating port: {error:?}");
-        }
-    }
+    // rest_api::main().unwrap()
+    backend::main()
 }
